@@ -47,4 +47,12 @@ bool getLocalDateStringFromTimestamp(time_t utc_ts, char* date_str, size_t date_
  */
 time_t parseUtcDtTxt(const char* dt_txt);
 
+/**
+ * Returns the UTC offset in seconds for the configured timezone at the given epoch timestamp.
+ *
+ * @param epoch Unix epoch timestamp in UTC seconds.
+ * @return UTC offset in seconds (e.g. -25200 for PDT, +28800 for HKT).
+ */
+long getTimezoneOffsetSeconds(time_t epoch);
+
 #endif // TIME_UTILS_H

@@ -88,6 +88,14 @@ bool getLocalDateStringFromTimestamp(time_t utc_ts, char* date_str, size_t date_
     return true;
 }
 
+long getTimezoneOffsetSeconds(time_t epoch) {
+    TimeZone tz = zoneManager.createForZoneName(settings.getTimezone().c_str());
+    if (tz.isError()) tz = zoneManager.createForZoneName("UTC");
+    ZonedDateTime zdt = ZonedDateTime::forUnixSeconds64(epoch, tz);
+    if (zdt.isError()) return 0;
+    return zdt.timeOffset().toSeconds();
+}
+
 #else // NATIVE_TEST
 
 bool ntpInitialized = true;
@@ -151,6 +159,14 @@ bool getLocalDateStringFromTimestamp(time_t utc_ts, char* date_str, size_t date_
         *local_hour = tm_info.tm_hour;
     }
     return true;
+}
+
+long getTimezoneOffsetSeconds(time_t epoch) {
+    setenv("TZ", settings.getTimezone().c_str(), 1);
+    tzset();
+    struct tm tm_loc;
+    localtime_r(&epoch, &tm_loc);
+    return tm_loc.tm_gmtoff;
 }
 
 #endif // NATIVE_TEST
