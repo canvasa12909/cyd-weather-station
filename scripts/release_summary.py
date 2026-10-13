@@ -1,20 +1,54 @@
 #!/usr/bin/env python3
-import sys
-import subprocess
-import re
+import argparse
 import os
+import re
+import subprocess
+import sys
 
 def run_cmd(cmd):
     return subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
 
+def format_special_thanks(thanks, reason=None):
+    if not thanks:
+        return None
+    thanks = thanks.strip()
+    if thanks.startswith("###"):
+        return thanks
+    if thanks.startswith("Huge thanks") or "\n" in thanks:
+        return thanks
+    name = thanks.strip("*")
+    if reason:
+        reason = reason.strip()
+        if not reason.endswith("!"):
+            reason += "!"
+        return f"Huge thanks to **{name}** for {reason}"
+    else:
+        return f"Huge thanks to **{name}**!"
+
 def main():
-    if len(sys.argv) > 1:
-        git_range = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Generate release summary")
+    parser.add_argument("range", nargs="?", default=None, help="Git commit or tag range (e.g. v0.1.36..v0.1.37)")
+    parser.add_argument("--thanks", "--special-thanks", dest="thanks", default=None, help="Person to thank or full thanks message")
+    parser.add_argument("--for", "--reason", dest="thanks_reason", default=None, help="Reason or contribution to thank the person for")
+    parser.add_argument("--dry-run", action="store_true", help="Print summary without updating GitHub release")
+    args = parser.parse_args()
+
+    if args.range:
+        git_range = args.range
         tags = git_range.split("..")
         if len(tags) == 2:
             latest = tags[1]
         else:
-            latest = run_cmd("git tag --sort=-v:refname | head -n 1")
+            latest = tags[0]
+            all_tags = run_cmd("git tag --sort=-v:refname").splitlines()
+            if latest in all_tags:
+                idx = all_tags.index(latest)
+                if idx + 1 < len(all_tags):
+                    git_range = f"{all_tags[idx+1]}..{latest}"
+                else:
+                    git_range = latest
+            else:
+                latest = run_cmd("git tag --sort=-v:refname | head -n 1")
     else:
         tags = run_cmd("git tag --sort=-v:refname | head -n 2").splitlines()
         if len(tags) < 2:
@@ -71,12 +105,21 @@ def main():
         summary.append("### ✨ **Improvements**\n\n" + "\n".join(sections['improve']) + "\n")
     if sections['docs']:
         summary.append("### 📝 **Documentation**\n\n" + "\n".join(sections['docs']) + "\n")
+
+    thanks_entry = format_special_thanks(args.thanks, args.thanks_reason)
+    if thanks_entry:
+        summary.append(f"### 🙏 **Special Thanks**\n\n{thanks_entry}\n")
         
     url_range = git_range.replace("..", "...")
     summary.append(f"**Full Changelog**: https://github.com/nicholaswilde/cyd-weather-station/compare/{url_range}\n")
     
     notes = "\n".join(summary)
     
+    if args.dry_run:
+        print("Dry run summary output:\n")
+        print(notes)
+        return
+
     with open('/tmp/release_notes.md', 'w') as f:
         f.write(notes)
         

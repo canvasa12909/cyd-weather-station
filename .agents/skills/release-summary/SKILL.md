@@ -15,4 +15,20 @@ This skill uses `scripts/release_summary.py` to retrieve git commit logs, format
    ```bash
    ./scripts/release_summary.py [range]
    ```
-2. The script will parse the commits, generate the markdown, and automatically run `gh release edit` to update the draft release in-place.
+
+2. **Special Thanks**: If the user asks to add special thanks (e.g. to a contributor or tester), pass `--thanks` (and optionally `--for` / reason):
+   ```bash
+   # Name and reason
+   ./scripts/release_summary.py [range] --thanks "<Name>" --for "<reason>"
+
+   # Or full message
+   ./scripts/release_summary.py [range] --thanks "Huge thanks to **<Name>** for <reason>!"
+   ```
+   This generates the section using the shape from the v0.1.37 release summary:
+   ```markdown
+   ### 🙏 **Special Thanks**
+
+   Huge thanks to **<Name>** for <reason>!
+   ```
+
+3. The script will parse the commits, generate the markdown, and automatically run `gh release edit` to update the draft release in-place.
