@@ -4,7 +4,7 @@
 [![test](https://img.shields.io/github/actions/workflow/status/nicholaswilde/cyd-weather-station/test.yaml?label=test&style=for-the-badge&branch=main&logo=github-actions)](https://github.com/nicholaswilde/cyd-weather-station/actions/workflows/test.yaml)
 [![ci](https://img.shields.io/github/actions/workflow/status/nicholaswilde/cyd-weather-station/ci.yaml?label=ci&style=for-the-badge&logo=github-actions)](https://github.com/nicholaswilde/cyd-weather-station/actions/workflows/ci.yaml)
 
-A beautiful, configurable real-time weather station and desk clock built for the **ESP32 Cheap Yellow Device (CYD)** family (such as the 2.8" Resistive **ESP32-2432S028R**, 2.8" Capacitive **ESP32-2432W328C**, and 3.5" Capacitive **ESP32-3248S035C**) utilizing the **LVGL v8** graphics library, **Open-Meteo / OpenWeatherMap APIs**, and the **Catppuccin Color Theme**.
+A beautiful, configurable real-time weather station and desk clock built for the **ESP32 Cheap Yellow Device (CYD)** family (such as the 2.8" Resistive **ESP32-2432S028R**, 2.8" Capacitive **ESP32-2432W328C**, 3.5" Capacitive **ESP32-3248S035C** and 3.5" Resistive **ESP32-E32R35T**) utilizing the **LVGL v8** graphics library, **Open-Meteo / OpenWeatherMap APIs**, and the **Catppuccin Color Theme**.
 
 > [!WARNING]
 > This project is currently in a `v0.X.X` development stage. Features and configurations are subject to change, and breaking changes may be introduced at any time.
