@@ -101,3 +101,6 @@ test
 .serena/cache/
 .serena/logs/
 .serena/project.local.yml
+.vscode/settings.json
+.vscode/extensions.json
+.vscode/launch.json
