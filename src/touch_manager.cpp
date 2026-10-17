@@ -31,30 +31,63 @@ static int s_lastY = 0;
 static unsigned long s_lastSampleMs = 0;
 
 static void updateTouchSample() {
-    unsigned long now = millis();
-    if (now - s_lastSampleMs < 10) {
-        return;
-    }
-    s_lastSampleMs = now;
+    // unsigned long now = millis();
+    // if (now - s_lastSampleMs < 10) {
+    //     return;
+    // }
+    // s_lastSampleMs = now;
+
+    // if (touch.touched()) {
+    //     TS_Point p = touch.getPoint();
+    //     if (p.x == 0 && p.y == 0) {
+    //         s_lastTouched = false; // Ignore phantom touches
+    //     } else {
+    //         s_lastX = p.x;
+    //         s_lastY = p.y;
+    //         s_lastTouched = true;
+    //     }
+    // } else {
+    //     s_lastTouched = false;
+    // }
 
     if (touch.touched()) {
         TS_Point p = touch.getPoint();
-        if (p.x == 0 && p.y == 0) {
-            s_lastTouched = false; // Ignore phantom touches
-        } else {
-            s_lastX = p.x;
-            s_lastY = p.y;
-            s_lastTouched = true;
-        }
-    } else {
+
+        s_lastX = p.x;
+        s_lastY = p.y;
+
+        s_lastTouched = (p.z > 500);
+    }
+    else {
         s_lastTouched = false;
     }
 }
 
 void TouchManager::begin() {
-    touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+    // touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+    // touch.begin(touchSPI);
+    // touch.setRotation(1); // landscape
+    Serial.println("[Touch] Starting...");
+
+    touchSPI.begin(
+        XPT2046_CLK,
+        XPT2046_MISO,
+        XPT2046_MOSI,
+        XPT2046_CS
+    );
+
     touch.begin(touchSPI);
-    touch.setRotation(1); // landscape
+
+    Serial.printf(
+        "[Touch] CS=%d IRQ=%d MOSI=%d MISO=%d CLK=%d\n",
+        XPT2046_CS,
+        XPT2046_IRQ,
+        XPT2046_MOSI,
+        XPT2046_MISO,
+        XPT2046_CLK
+    );
+
+    touch.setRotation(1);
 }
 
 bool TouchManager::isTouched() {

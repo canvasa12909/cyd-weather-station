@@ -93,8 +93,12 @@ void mapTouchCoordinates(int16_t raw_x, int16_t raw_y, int16_t& out_x, int16_t& 
         out_y = ly;
     } else {
         // --- map to base dimensions ---
-        lx = map(raw_x, 200, 3700, 0, w_land);
-        ly = map(raw_y, 200, 3900, 0, h_land);
+        // lx = map(raw_x, 200, 3700, 0, w_land);
+        // ly = map(raw_y, 200, 3900, 0, h_land);
+
+        lx = map(raw_x, 3918, 278, 0, w_land);
+        ly = map(raw_y, 3806, 243, 0, h_land);
+
         
         // --- adjust based on orientation ---
         switch (orientation) {
@@ -133,25 +137,32 @@ void mapTouchCoordinates(int16_t raw_x, int16_t raw_y, int16_t& out_x, int16_t& 
 
 // Touch read callback for LVGL input
 static void my_touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
-    if (TouchManager::isTouched()) {
-#ifndef NATIVE_TEST
-        screensaver.feedActivity();
-#endif
-        int tx, ty;
-        TouchManager::getTouchPoint(tx, ty);
-        
+
+    int tx, ty;
+
+    if (TouchManager::getTouchPoint(tx, ty)) {
+
         int16_t x = 0;
         int16_t y = 0;
-        int orientation = 1;
+
 #ifndef NATIVE_TEST
-        orientation = settings.getScreenOrientation();
+        int orientation = settings.getScreenOrientation();
+#else
+        int orientation = 1;
 #endif
+
         mapTouchCoordinates(tx, ty, x, y, orientation);
 
-        data->state = LV_INDEV_STATE_PR;
+        
+
         data->point.x = x;
         data->point.y = y;
-    } else {
+
+        // data->point.x = 479 - x;
+        // data->point.y = 319 - y;
+        data->state = LV_INDEV_STATE_PR;
+    }
+    else {
         data->state = LV_INDEV_STATE_REL;
     }
 }
