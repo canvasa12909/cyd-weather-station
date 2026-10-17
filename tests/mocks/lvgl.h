@@ -45,7 +45,12 @@ typedef struct {
     void * buf1;
 } lv_disp_draw_buf_t;
 
+typedef struct _lv_disp_t {
+    lv_disp_drv_t * driver;
+} lv_disp_t;
+
 inline void lv_init() {}
+inline lv_disp_t * lv_disp_get_default() { return nullptr; }
 inline void lv_disp_draw_buf_init(lv_disp_draw_buf_t *, void *, void *, uint32_t) {}
 inline void lv_disp_drv_init(lv_disp_drv_t *) {}
 inline void lv_disp_drv_register(lv_disp_drv_t *) {}

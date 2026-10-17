@@ -1,4 +1,5 @@
 #include "weather_client.h"
+#include "time_utils.h"
 #include <ArduinoJson.h>
 #include "config/config.h"
 #include "settings_manager.h"
@@ -250,7 +251,7 @@ WeatherData WeatherClient::fetchWeather() {
 #endif
 }
 
-bool WeatherClient::parseWeatherJson(const char* json, WeatherData& data) {
+bool WeatherClient::parseWeatherJson(const char* json, WeatherData& data, time_t ref_time) {
     DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, json);
 
@@ -286,10 +287,8 @@ bool WeatherClient::parseWeatherJson(const char* json, WeatherData& data) {
 #ifndef NATIVE_TEST
             char now_buf[14] = "";
             if (current_time == nullptr) {
-                time_t now = time(nullptr);
-                if (now > 946684800L) {
-                    struct tm tm_now;
-                    localtime_r(&now, &tm_now);
+                struct tm tm_now;
+                if (getLocalTimeWrapper(&tm_now)) {
                     snprintf(now_buf, sizeof(now_buf), "%04d-%02d-%02dT%02d",
                              tm_now.tm_year + 1900, tm_now.tm_mon + 1, tm_now.tm_mday, tm_now.tm_hour);
                     current_time = now_buf;
@@ -337,22 +336,9 @@ bool WeatherClient::parseWeatherJson(const char* json, WeatherData& data) {
         // Falls back to index-based labelling if NTP hasn't synced yet.
         char today_str[11]    = "";
         char tomorrow_str[11] = "";
-#ifndef NATIVE_TEST
-        time_t now = time(nullptr);
-        const bool time_valid = (now > 946684800L); // after year 2000 = NTP synced
-        if (time_valid) {
-            struct tm tm_today, tm_tomorrow;
-            localtime_r(&now, &tm_today);
-            time_t tmrw = now + 86400;
-            localtime_r(&tmrw, &tm_tomorrow);
-            snprintf(today_str,    sizeof(today_str),    "%04d-%02d-%02d",
-                tm_today.tm_year + 1900,    tm_today.tm_mon + 1,    tm_today.tm_mday);
-            snprintf(tomorrow_str, sizeof(tomorrow_str), "%04d-%02d-%02d",
-                tm_tomorrow.tm_year + 1900, tm_tomorrow.tm_mon + 1, tm_tomorrow.tm_mday);
-        }
-#else
-        const bool time_valid = false; // native test: fall back to index-based
-#endif
+        const bool time_valid = getLocalDateStrings(today_str, sizeof(today_str),
+                                                    tomorrow_str, sizeof(tomorrow_str),
+                                                    ref_time);
 
         for (int i = 0; i < 3; i++) {
             if (i < (int)daily_time.size()) {
@@ -365,15 +351,10 @@ bool WeatherClient::parseWeatherJson(const char* json, WeatherData& data) {
                 String dateStr = daily_time[i].as<String>();
 
                 // Determine the human-readable label for this date.
-                // Priority: timezone-aware match > index-based fallback > day name.
-                if (time_valid && dateStr == today_str) {
+                // Forecast slots are fixed: Slot 0 = Today, Slot 1 = Tomorrow, Slot 2 = Day After Tomorrow
+                if (i == 0) {
                     data.forecast[i].dayName = "Today";
-                } else if (time_valid && dateStr == tomorrow_str) {
-                    data.forecast[i].dayName = "Tmrw";
-                } else if (!time_valid && i == 0) {
-                    // NTP not yet synced: assume API day 0 is today
-                    data.forecast[i].dayName = "Today";
-                } else if (!time_valid && i == 1) {
+                } else if (i == 1) {
                     data.forecast[i].dayName = "Tmrw";
                 } else if (dateStr.length() >= 10) {
                     // Compute short day name from the date string
@@ -440,8 +421,9 @@ String WeatherClient::getWeatherDesc(int code) {
     }
 }
 
-bool WeatherClient::parseOwmJson(const char* json, WeatherData& data) {
+bool WeatherClient::parseOwmJson(const char* json, WeatherData& data, time_t ref_time) {
     StaticJsonDocument<1024> filter;
+    filter["list"][0]["dt"] = true;
     filter["list"][0]["dt_txt"] = true;
     filter["list"][0]["main"]["temp"] = true;
     filter["list"][0]["main"]["humidity"] = true;
@@ -453,6 +435,7 @@ bool WeatherClient::parseOwmJson(const char* json, WeatherData& data) {
     filter["list"][0]["weather"][0]["description"] = true;
     filter["list"][0]["pop"] = true;
     filter["city"]["name"] = true;
+    filter["city"]["timezone"] = true;
 
     DynamicJsonDocument doc(12288);
     DeserializationError error = deserializeJson(doc, json, DeserializationOption::Filter(filter));
@@ -500,124 +483,156 @@ bool WeatherClient::parseOwmJson(const char* json, WeatherData& data) {
     data.cityName = _cityName;
 
     // 2. Parse 3-day forecast (Today, Tomorrow, Day after)
-    // We group OWM's 3-hourly forecasts by local date.
-    // Each date will have max/min temps calculated, and we grab weather condition closest to midday (12:00:00).
-    
-    struct DayForecastTemp {
+    // OpenWeatherMap returns city.timezone (UTC offset in seconds).
+    long city_tz_offset = 0;
+    bool has_city_tz = false;
+    if (doc.containsKey("city") && doc["city"].containsKey("timezone")) {
+        city_tz_offset = doc["city"]["timezone"].as<long>();
+        has_city_tz = true;
+    }
+
+    // Determine reference time in UTC
+    time_t now_utc = ref_time;
+    if (now_utc == 0) {
+        now_utc = time(nullptr);
+    }
+    // If NTP is not yet synced on ESP32 or test mock data differs significantly from system clock:
+    if (list.size() > 0) {
+        time_t first_entry_ts = 0;
+        if (list[0].containsKey("dt")) {
+            first_entry_ts = list[0]["dt"].as<time_t>();
+        } else if (list[0].containsKey("dt_txt")) {
+            first_entry_ts = parseUtcDtTxt(list[0]["dt_txt"].as<const char*>());
+        }
+        if (first_entry_ts > 0 && (now_utc < 946684800L || labs(now_utc - first_entry_ts) > 7 * 86400L)) {
+            now_utc = first_entry_ts;
+        }
+    }
+
+    // Fallback to configured device timezone if city.timezone was omitted
+    if (!has_city_tz) {
+        city_tz_offset = getTimezoneOffsetSeconds(now_utc);
+    }
+
+    // Compute local calendar dates for Today, Tomorrow, and Day 2 in city timezone
+    time_t city_now = now_utc + city_tz_offset;
+    struct tm tm_today;
+    gmtime_r(&city_now, &tm_today);
+    char today_str[11];
+    snprintf(today_str, sizeof(today_str), "%04d-%02d-%02d",
+             tm_today.tm_year + 1900, tm_today.tm_mon + 1, tm_today.tm_mday);
+
+    time_t city_tomorrow = city_now + 86400;
+    struct tm tm_tomorrow;
+    gmtime_r(&city_tomorrow, &tm_tomorrow);
+    char tomorrow_str[11];
+    snprintf(tomorrow_str, sizeof(tomorrow_str), "%04d-%02d-%02d",
+             tm_tomorrow.tm_year + 1900, tm_tomorrow.tm_mon + 1, tm_tomorrow.tm_mday);
+
+    time_t city_day2 = city_now + 172800;
+    struct tm tm_day2;
+    gmtime_r(&city_day2, &tm_day2);
+    char day2_str[11];
+    snprintf(day2_str, sizeof(day2_str), "%04d-%02d-%02d",
+             tm_day2.tm_year + 1900, tm_day2.tm_mon + 1, tm_day2.tm_mday);
+
+    static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+    const char* day2_name = (tm_day2.tm_wday >= 0 && tm_day2.tm_wday < 7) ? days[tm_day2.tm_wday] : "";
+
+    struct TargetDayForecast {
         float tempMin = 999.0f;
         float tempMax = -999.0f;
         int weatherCode = -1;
         String status = "";
-        bool hasMidday = false;
+        int bestMiddayDist = 999;
+        bool hasData = false;
     };
 
-    String uniqueDays[5];
-    DayForecastTemp dayTemps[5];
-    int dayCount = 0;
+    TargetDayForecast targetDays[3];
 
     for (JsonObject entry : list) {
-        String dt_txt = entry["dt_txt"].as<String>();
-        if (dt_txt.length() < 10) continue;
+        time_t utc_ts = 0;
+        if (entry.containsKey("dt")) {
+            utc_ts = entry["dt"].as<time_t>();
+        } else if (entry.containsKey("dt_txt")) {
+            utc_ts = parseUtcDtTxt(entry["dt_txt"].as<const char*>());
+        }
+        if (utc_ts == 0) continue;
+
+        time_t entry_city_ts = utc_ts + city_tz_offset;
+        struct tm tm_entry;
+        gmtime_r(&entry_city_ts, &tm_entry);
         char dateBuf[11];
-        strncpy(dateBuf, dt_txt.c_str(), 10);
-        dateBuf[10] = '\0';
-        String dateStr(dateBuf);
-        
-        // Find if this date is already tracked
-        int idx = -1;
-        for (int i = 0; i < dayCount; i++) {
-            if (uniqueDays[i] == dateStr) {
-                idx = i;
-                break;
-            }
-        }
-        
-        if (idx == -1) {
-            if (dayCount >= 5) continue; // Only track up to 5 days
-            idx = dayCount;
-            uniqueDays[idx] = dateStr;
-            dayCount++;
-        }
+        snprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d",
+                 tm_entry.tm_year + 1900, tm_entry.tm_mon + 1, tm_entry.tm_mday);
 
-        // Update min/max temperatures
-        float tMin = entry["main"]["temp_min"].as<float>();
-        float tMax = entry["main"]["temp_max"].as<float>();
-        if (tMin < dayTemps[idx].tempMin) dayTemps[idx].tempMin = tMin;
-        if (tMax > dayTemps[idx].tempMax) dayTemps[idx].tempMax = tMax;
+        int targetSlot = -1;
+        if (strcmp(dateBuf, today_str) == 0) targetSlot = 0;
+        else if (strcmp(dateBuf, tomorrow_str) == 0) targetSlot = 1;
+        else if (strcmp(dateBuf, day2_str) == 0) targetSlot = 2;
 
-        // Pick weather condition. Prefer midday (12:00:00).
-        // If not midday, and we don't have midday set yet, use the first/any entry.
-        bool isMidday = strstr(dt_txt.c_str(), "12:00:00") != nullptr;
-        if (isMidday || (!dayTemps[idx].hasMidday && dayTemps[idx].weatherCode == -1)) {
-            int code = entry["weather"][0]["id"].as<int>();
-            dayTemps[idx].weatherCode = owmToWmoCode(code);
-            dayTemps[idx].status = entry["weather"][0]["description"].as<String>();
-            if (dayTemps[idx].status.length() > 0) {
-                dayTemps[idx].status[0] = toupper(dayTemps[idx].status[0]);
-            }
-            if (isMidday) {
-                dayTemps[idx].hasMidday = true;
+        if (targetSlot >= 0) {
+            targetDays[targetSlot].hasData = true;
+            float tMin = entry["main"].containsKey("temp_min") ? entry["main"]["temp_min"].as<float>() : entry["main"]["temp"].as<float>();
+            float tMax = entry["main"].containsKey("temp_max") ? entry["main"]["temp_max"].as<float>() : entry["main"]["temp"].as<float>();
+            if (tMin < targetDays[targetSlot].tempMin) targetDays[targetSlot].tempMin = tMin;
+            if (tMax > targetDays[targetSlot].tempMax) targetDays[targetSlot].tempMax = tMax;
+
+            int local_hour = tm_entry.tm_hour;
+            int dist = abs(local_hour - 12);
+            if (dist < targetDays[targetSlot].bestMiddayDist || targetDays[targetSlot].weatherCode == -1) {
+                targetDays[targetSlot].bestMiddayDist = dist;
+                int code = entry["weather"][0]["id"].as<int>();
+                targetDays[targetSlot].weatherCode = owmToWmoCode(code);
+                targetDays[targetSlot].status = entry["weather"][0]["description"].as<String>();
+                if (targetDays[targetSlot].status.length() > 0) {
+                    targetDays[targetSlot].status[0] = toupper(targetDays[targetSlot].status[0]);
+                }
             }
         }
     }
 
-    // Now populate the 3 forecast days.
-    char today_str[11] = "";
-    char tomorrow_str[11] = "";
-    bool time_valid = false;
-#ifndef NATIVE_TEST
-    time_t now = time(nullptr);
-    time_valid = (now > 946684800L); // after year 2000
-    if (time_valid) {
-        struct tm tm_today, tm_tomorrow;
-        localtime_r(&now, &tm_today);
-        time_t tmrw = now + 86400;
-        localtime_r(&tmrw, &tm_tomorrow);
-        snprintf(today_str, sizeof(today_str), "%04d-%02d-%02d",
-            tm_today.tm_year + 1900, tm_today.tm_mon + 1, tm_today.tm_mday);
-        snprintf(tomorrow_str, sizeof(tomorrow_str), "%04d-%02d-%02d",
-            tm_tomorrow.tm_year + 1900, tm_tomorrow.tm_mon + 1, tm_tomorrow.tm_mday);
+    // If today's remaining 3-hourly intervals have passed (e.g. late evening), use current conditions
+    if (!targetDays[0].hasData) {
+        targetDays[0].tempMin = data.temperature;
+        targetDays[0].tempMax = data.temperature;
+        targetDays[0].weatherCode = data.weatherCode;
+        targetDays[0].status = data.status;
+        targetDays[0].hasData = true;
     }
-#endif
 
-    // Map uniqueDays to forecast slots
-    for (int i = 0; i < 3; i++) {
-        if (i < dayCount) {
-            data.forecast[i].tempMax = dayTemps[i].tempMax;
-            data.forecast[i].tempMin = dayTemps[i].tempMin;
-            data.forecast[i].weatherCode = dayTemps[i].weatherCode;
-            data.forecast[i].status = dayTemps[i].status;
+    // Populate the 3 forecast slots: Slot 0 = Today, Slot 1 = Tomorrow, Slot 2 = Day 2
+    data.forecast[0].tempMax = targetDays[0].tempMax;
+    data.forecast[0].tempMin = targetDays[0].tempMin;
+    data.forecast[0].weatherCode = targetDays[0].weatherCode;
+    data.forecast[0].status = targetDays[0].status;
+    data.forecast[0].dayName = "Today";
 
-            String dateStr = uniqueDays[i];
-            if (time_valid && dateStr == today_str) {
-                data.forecast[i].dayName = "Today";
-            } else if (time_valid && dateStr == tomorrow_str) {
-                data.forecast[i].dayName = "Tmrw";
-            } else if (!time_valid && i == 0) {
-                data.forecast[i].dayName = "Today";
-            } else if (!time_valid && i == 1) {
-                data.forecast[i].dayName = "Tmrw";
-            } else {
-                // Compute short day name using Sakamoto
-                int y = (dateStr[0]-'0')*1000 + (dateStr[1]-'0')*100
-                      + (dateStr[2]-'0')*10  + (dateStr[3]-'0');
-                int m = (dateStr[5]-'0')*10 + (dateStr[6]-'0');
-                int d = (dateStr[8]-'0')*10 + (dateStr[9]-'0');
-
-                static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-                static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
-                if (m < 3) y -= 1;
-                int dayIdx = (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
-                data.forecast[i].dayName = (dayIdx >= 0 && dayIdx < 7) ? days[dayIdx] : dateStr;
-            }
-        } else {
-            data.forecast[i].tempMax = 0.0f;
-            data.forecast[i].tempMin = 0.0f;
-            data.forecast[i].weatherCode = -1;
-            data.forecast[i].status = "Unknown";
-            data.forecast[i].dayName = "N/A";
-        }
+    if (targetDays[1].hasData) {
+        data.forecast[1].tempMax = targetDays[1].tempMax;
+        data.forecast[1].tempMin = targetDays[1].tempMin;
+        data.forecast[1].weatherCode = targetDays[1].weatherCode;
+        data.forecast[1].status = targetDays[1].status;
+    } else {
+        data.forecast[1].tempMax = targetDays[0].tempMax;
+        data.forecast[1].tempMin = targetDays[0].tempMin;
+        data.forecast[1].weatherCode = targetDays[0].weatherCode;
+        data.forecast[1].status = targetDays[0].status;
     }
+    data.forecast[1].dayName = "Tmrw";
+
+    if (targetDays[2].hasData) {
+        data.forecast[2].tempMax = targetDays[2].tempMax;
+        data.forecast[2].tempMin = targetDays[2].tempMin;
+        data.forecast[2].weatherCode = targetDays[2].weatherCode;
+        data.forecast[2].status = targetDays[2].status;
+    } else {
+        data.forecast[2].tempMax = data.forecast[1].tempMax;
+        data.forecast[2].tempMin = data.forecast[1].tempMin;
+        data.forecast[2].weatherCode = data.forecast[1].weatherCode;
+        data.forecast[2].status = data.forecast[1].status;
+    }
+    data.forecast[2].dayName = day2_name;
 
     // 3. Parse hourly forecast (24 hours at 3-hour intervals)
     // OWM list array contains 3-hourly entries. We map them to 24 slots.

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+# Pull latest changes and tags
+echo "Fetching latest tags and commits from origin..."
+git fetch --tags origin
+git pull --rebase origin main
+
 # Extract and calculate next version
 LATEST_TAG=$(git tag --sort=-v:refname | head -n 1)
 CURRENT_VER=${LATEST_TAG#v}
@@ -28,9 +33,6 @@ if [ -n "$(git status --porcelain)" ]; then
     echo "Error: Working directory not clean after bumping version."
     exit 1
 fi
-
-echo "Pulling latest changes..."
-git pull --rebase origin main
 
 echo "Tagging release..."
 git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
